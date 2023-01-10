@@ -175,7 +175,6 @@ int nsolvecalls = 0;
 class HighsSCIP : public Highs
 {
    bool                  _lpinfo;
-   bool                  _fromscratch;
    char*                 _probname;
    SCIP_MESSAGEHDLR*     _messagehdlr; /**< messagehdlr handler for printing messages, or NULL */
 
@@ -186,7 +185,6 @@ public:
       const char*        probname = NULL     /**< name of problem */
             )
       : _lpinfo(false),
-        _fromscratch(false),
         _probname(NULL),
         _messagehdlr(messagehdlr)
    {
@@ -208,6 +206,7 @@ struct SCIP_LPi
    int                   cstatsize;          /**< size of cstat array */
    int                   rstatsize;          /**< size of rstat array */
    int                   nthreads;           /**< number of threads to be used */
+   SCIP_Bool             fromscratch;        /**< shall solves be performed from scratch? */
    SCIP_Bool             solved;             /**< was the current LP solved? */
    SCIP_MESSAGEHDLR*     messagehdlr;        /**< messagehdlr handler for printing messages, or NULL */
 };
@@ -535,6 +534,7 @@ SCIP_RETCODE SCIPlpiCreate(
    (*lpi)->cstatsize = 0;
    (*lpi)->rstatsize = 0;
    (*lpi)->nthreads = 1;
+   (*lpi)->fromscratch = FALSE;
    (*lpi)->solved = FALSE;
    (*lpi)->messagehdlr = messagehdlr;
 
@@ -1313,7 +1313,11 @@ SCIP_RETCODE SCIPlpiSolveDual(
    const bool check_lp = nsolvecalls == ck_ca_n;
    SCIPdebugMessage("In HiGHS dual-solve is called for the %d time.\n", nsolvecalls);
 
-   /* FIXME: HiGHS still seems to get stuck sometimes in parallel mode, so we ignore nthreads for now. */
+   if( lpi->fromscratch )
+   {
+      HIGHS_CALL( lpi->highs->clearSolver() );
+   }
+
 #ifdef WITH_HIGHSPARALLEL
    if( lpi->nthreads == 0 || lpi->nthreads > 1 )
    {
@@ -2601,6 +2605,9 @@ SCIP_RETCODE SCIPlpiGetIntpar(
 
    switch( type )
    {
+   case SCIP_LPPAR_FROMSCRATCH:
+      *ival = (int) lpi->fromscratch;
+      break;
    case SCIP_LPPAR_LPINFO:
       {
          bool bool_ival;
@@ -2640,6 +2647,10 @@ SCIP_RETCODE SCIPlpiSetIntpar(
 
    switch( type )
    {
+   case SCIP_LPPAR_FROMSCRATCH:
+      assert(ival == TRUE || ival == FALSE);
+      lpi->fromscratch = (SCIP_Bool) ival;
+      break;
    case SCIP_LPPAR_LPINFO:
       assert(ival == TRUE || ival == FALSE);
       HIGHS_CALL( lpi->highs->setOptionValue("output_flag", (bool) ival) );
