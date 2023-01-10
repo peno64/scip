@@ -548,8 +548,10 @@ SCIP_RETCODE SCIPlpiCreate(
    HIGHS_CALL( (*lpi)->highs->setOptionValue("highs_debug_level", 2) );
 #endif
 
-   /* switch HiGHS scaling and presolve off */
-   HIGHS_CALL( (*lpi)->highs->setOptionValue("simplex_scale_strategy", 0) );
+   /* use normal scaling by default */
+   SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_SCALING, 1) );
+
+   /* switch HiGHS presolve off */
    HIGHS_CALL( (*lpi)->highs->setOptionValue("presolve", "off") );
 
    return SCIP_OKAY;
@@ -2617,7 +2619,12 @@ SCIP_RETCODE SCIPlpiGetIntpar(
       break;
    case SCIP_LPPAR_SCALING:
       HIGHS_CALL( lpi->highs->getOptionValue("simplex_scale_strategy", *ival) );
-      if( *ival > 2 )
+      assert(*ival == 0 || *ival == 2 || *ival == 4); /* values used in SCIPlpiSetIntpar() */
+      if( *ival <= 0 )
+         *ival = 0;
+      else if( *ival <= 2 )
+         *ival = 1;
+      else
          *ival = 2;
       break;
    case SCIP_LPPAR_THREADS:
@@ -2656,7 +2663,16 @@ SCIP_RETCODE SCIPlpiSetIntpar(
       HIGHS_CALL( lpi->highs->setOptionValue("output_flag", (bool) ival) );
       break;
    case SCIP_LPPAR_SCALING:
-      HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", ival) );
+      assert(ival >= 0 && ival <= 2);
+      if( ival == 0 )
+         /* off */
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", 0) );
+      else if( ival == 1 )
+         /* forced equilibration */
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", 2) );
+      else
+         /* max. value scaling */
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", 4) );
       break;
    case SCIP_LPPAR_THREADS:
       lpi->nthreads = ival;
