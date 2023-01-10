@@ -208,6 +208,7 @@ struct SCIP_LPi
    int                   nthreads;           /**< number of threads to be used */
    SCIP_Bool             fromscratch;        /**< shall solves be performed from scratch? */
    SCIP_Bool             solved;             /**< was the current LP solved? */
+   SCIP_PRICING          pricing;            /**< SCIP pricing setting  */
    SCIP_MESSAGEHDLR*     messagehdlr;        /**< messagehdlr handler for printing messages, or NULL */
 };
 
@@ -536,6 +537,7 @@ SCIP_RETCODE SCIPlpiCreate(
    (*lpi)->nthreads = 1;
    (*lpi)->fromscratch = FALSE;
    (*lpi)->solved = FALSE;
+   (*lpi)->pricing = SCIP_PRICING_LPIDEFAULT;
    (*lpi)->messagehdlr = messagehdlr;
 
    invalidateSolution(*lpi);
@@ -548,11 +550,14 @@ SCIP_RETCODE SCIPlpiCreate(
    HIGHS_CALL( (*lpi)->highs->setOptionValue("highs_debug_level", 2) );
 #endif
 
-   /* use normal scaling by default */
+   /* set default scaling */
    SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_SCALING, 1) );
 
    /* switch HiGHS presolve off */
    HIGHS_CALL( (*lpi)->highs->setOptionValue("presolve", "off") );
+
+   /* set default pricing */
+   SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_PRICING, (int)(*lpi)->pricing) );
 
    return SCIP_OKAY;
 }
@@ -2627,6 +2632,9 @@ SCIP_RETCODE SCIPlpiGetIntpar(
       else
          *ival = 2;
       break;
+   case SCIP_LPPAR_PRICING:
+      *ival = (int)lpi->pricing; /* store pricing method in LPI struct */
+      break;
    case SCIP_LPPAR_THREADS:
       *ival = lpi->nthreads;
       break;
@@ -2673,6 +2681,30 @@ SCIP_RETCODE SCIPlpiSetIntpar(
       else
          /* max. value scaling */
          HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", 4) );
+      break;
+   case SCIP_LPPAR_PRICING:
+      lpi->pricing = (SCIP_PRICING)ival;
+      switch( lpi->pricing )
+      {
+      case SCIP_PRICING_LPIDEFAULT:
+      case SCIP_PRICING_PARTIAL:
+      case SCIP_PRICING_AUTO:
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_primal_edge_weight_strategy", -1) );
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_dual_edge_weight_strategy", -1) );
+         break;
+      case SCIP_PRICING_DEVEX:
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_primal_edge_weight_strategy", 1) );
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_dual_edge_weight_strategy", 1) );
+         break;
+      case SCIP_PRICING_FULL:
+      case SCIP_PRICING_STEEP:
+      case SCIP_PRICING_STEEPQSTART:
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_primal_edge_weight_strategy", 2) );
+         HIGHS_CALL( lpi->highs->setOptionValue("simplex_dual_edge_weight_strategy", 2) );
+         break;
+      default:
+         return SCIP_LPERROR;
+      }
       break;
    case SCIP_LPPAR_THREADS:
       lpi->nthreads = ival;
