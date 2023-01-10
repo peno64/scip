@@ -553,8 +553,9 @@ SCIP_RETCODE SCIPlpiCreate(
    /* set default scaling */
    SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_SCALING, 1) );
 
-   /* switch HiGHS presolve off */
-   HIGHS_CALL( (*lpi)->highs->setOptionValue("presolve", "off") );
+   /* use presolve by default; HiGHS runs without presolving whenever a basis is available */
+   SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_PRESOLVING, 1) );
+   HIGHS_CALL( (*lpi)->highs->setOptionValue("lp_presolve_requires_basis_postsolve", true) );
 
    /* set default pricing */
    SCIP_CALL( SCIPlpiSetIntpar(*lpi, SCIP_LPPAR_PRICING, (int)(*lpi)->pricing) );
@@ -1310,6 +1311,8 @@ SCIP_RETCODE SCIPlpiSolveDual(
    SCIP_LPI*             lpi                 /**< LP interface structure */
    )
 {
+   std::string presolvestring;
+
    SCIPdebugMessage("calling SCIPlpiSolveDual()\n");
 
    assert(lpi != NULL);
@@ -1354,6 +1357,17 @@ SCIP_RETCODE SCIPlpiSolveDual(
    {
       SCIPerrorMessage("HiGHS returned HighsModelStatus=%d.\n", (int)lpi->highs->getModelStatus());
       return SCIP_LPERROR;
+   }
+
+   /* if basis factorization is unavailable, this may be due to presolving; then solve again without presolve */
+   HIGHS_CALL( lpi->highs->getOptionValue("presolve", presolvestring) );
+   assert(presolvestring == "on" || presolvestring == "off"); /* values used in SCIPlpiSetIntpar() */
+   if( !lpi->highs->hasInvert() && presolvestring == "on" )
+   {
+      SCIPdebugMessage("No inverse: running HiGHS again without presolve . . .\n");
+      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "off") );
+      SCIP_CALL( SCIPlpiSolveDual(lpi) );
+      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "on") );
    }
 
    if( check_lp )
@@ -2632,6 +2646,14 @@ SCIP_RETCODE SCIPlpiGetIntpar(
       else
          *ival = 2;
       break;
+   case SCIP_LPPAR_PRESOLVING:
+      {
+         std::string presolve;
+         HIGHS_CALL( lpi->highs->getOptionValue("presolve", presolve) );
+         assert(presolve == "on" || presolve == "off"); /* values used in SCIPlpiSetIntpar() */
+         *ival = (presolve == "on");
+      }
+      break;
    case SCIP_LPPAR_PRICING:
       *ival = (int)lpi->pricing; /* store pricing method in LPI struct */
       break;
@@ -2684,6 +2706,10 @@ SCIP_RETCODE SCIPlpiSetIntpar(
       else
          /* max. value scaling */
          HIGHS_CALL( lpi->highs->setOptionValue("simplex_scale_strategy", 4) );
+      break;
+   case SCIP_LPPAR_PRESOLVING:
+      assert(ival == TRUE || ival == FALSE);
+      HIGHS_CALL( lpi->highs->setOptionValue("presolve", ival ? "on" : "off") );
       break;
    case SCIP_LPPAR_PRICING:
       lpi->pricing = (SCIP_PRICING)ival;
