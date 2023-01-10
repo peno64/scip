@@ -2641,6 +2641,9 @@ SCIP_RETCODE SCIPlpiGetIntpar(
    case SCIP_LPPAR_LPITLIM:
       HIGHS_CALL( lpi->highs->getOptionValue("simplex_iteration_limit", *ival) );
       break;
+   case SCIP_LPPAR_RANDOMSEED:
+      HIGHS_CALL( lpi->highs->getOptionValue("random_seed", *ival) );
+      break;
    default:
       return SCIP_PARAMETERUNKNOWN;
   }
@@ -2711,6 +2714,9 @@ SCIP_RETCODE SCIPlpiSetIntpar(
       break;
    case SCIP_LPPAR_LPITLIM:
       HIGHS_CALL( lpi->highs->setOptionValue("simplex_iteration_limit", ival) );
+      break;
+   case SCIP_LPPAR_RANDOMSEED:
+      HIGHS_CALL( lpi->highs->setOptionValue("random_seed", ival) );
       break;
    default:
       return SCIP_PARAMETERUNKNOWN;
