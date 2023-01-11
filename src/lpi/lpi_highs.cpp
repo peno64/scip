@@ -121,11 +121,7 @@
                            {                                                                                   \
                               HighsStatus _restat_; /*lint -e{506,774}*/                                       \
                               (_restat_ = (x));                                                                \
-                              if( _restat_ == HighsStatus::kWarning )                                          \
-                              {                                                                                \
-                                 SCIPerrorMessage("Warning in HiGHS function call\n");                         \
-                              }                                                                                \
-                              else if( _restat_ != HighsStatus::kOk )                                          \
+                              if( _restat_ != HighsStatus::kOk && _restat_ != HighsStatus::kWarning )          \
                               {                                                                                \
                                  SCIPerrorMessage("Error in HiGHS function call\n");                           \
                                  return SCIP_LPERROR;                                                          \
