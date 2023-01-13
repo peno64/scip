@@ -1339,7 +1339,7 @@ SCIP_RETCODE SCIPlpiSolveDual(
    HIGHS_CALL_WITH_WARNING( lpi->highs->run() );
 
    /* FIXME: query error-free model status safely */
-   if( lpi->highs->getModelStatus() < HighsModelStatus::kOptimal || lpi->highs->getModelStatus() >= HighsModelStatus::kUnknown )
+   if( lpi->highs->getModelStatus() < HighsModelStatus::kModelEmpty || lpi->highs->getModelStatus() >= HighsModelStatus::kUnknown )
    {
       SCIPerrorMessage("HiGHS returned HighsModelStatus=%d.\n", (int)lpi->highs->getModelStatus());
       return SCIP_LPERROR;
@@ -1660,6 +1660,23 @@ SCIP_Bool SCIPlpiIsPrimalInfeasible(
    assert(lpi->highs != NULL);
 
    HighsModelStatus model_status = lpi->highs->getModelStatus();
+
+   /* not sure how to query HiGHS in this case, but we can easily decide */
+   if( model_status == HighsModelStatus::kModelEmpty )
+   {
+      int numrow = lpi->highs->getNumRow();
+
+      assert(lpi->highs->getNumCol() == 0);
+
+      for( int i = 0; i < numrow; i++ )
+      {
+         if( lpi->highs->getLp().row_lower_[i] > 0.0 || lpi->highs->getLp().row_upper_[i] < 0.0 )
+            return TRUE;
+      }
+      return FALSE;
+   }
+
+   /* otherwise we rely on the model status */
    const bool primal_infeasible =
       model_status == HighsModelStatus::kInfeasible ||
       model_status == HighsModelStatus::kUnboundedOrInfeasible;
@@ -1677,6 +1694,23 @@ SCIP_Bool SCIPlpiIsPrimalFeasible(
    assert(lpi->highs != NULL);
 
    HighsModelStatus model_status = lpi->highs->getModelStatus();
+
+   /* not sure how to query HiGHS in this case, but we can easily decide */
+   if( model_status == HighsModelStatus::kModelEmpty )
+   {
+      int numrow = lpi->highs->getNumRow();
+
+      assert(lpi->highs->getNumCol() == 0);
+
+      for( int i = 0; i < numrow; i++ )
+      {
+         if( lpi->highs->getLp().row_lower_[i] > 0.0 || lpi->highs->getLp().row_upper_[i] < 0.0 )
+            return FALSE;
+      }
+      return TRUE;
+   }
+
+   /* otherwise we rely on the model status */
    const bool primal_feasible =
       model_status == HighsModelStatus::kOptimal ||
       model_status == HighsModelStatus::kUnbounded;
@@ -1709,6 +1743,13 @@ SCIP_Bool SCIPlpiHasDualRay(
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
 
+   HighsModelStatus model_status = lpi->highs->getModelStatus();
+
+   /* HiGHS does not implement this case, but we can easily decide */
+   if( model_status == HighsModelStatus::kModelEmpty )
+      return !SCIPlpiIsPrimalFeasible(lpi);
+
+   /* otherwise we rely on the model status */
    bool has_dual_ray = false;
    HIGHS_CALL( lpi->highs->getDualRay(has_dual_ray, NULL) );
    return has_dual_ray;
@@ -1756,7 +1797,7 @@ SCIP_Bool SCIPlpiIsDualFeasible(
 
    HighsModelStatus model_status = lpi->highs->getModelStatus();
 
-   if( model_status == HighsModelStatus::kOptimal )
+   if( model_status == HighsModelStatus::kOptimal || model_status == HighsModelStatus::kModelEmpty )
       return TRUE;
    else if( model_status == HighsModelStatus::kUnbounded || model_status == HighsModelStatus::kUnboundedOrInfeasible )
       return FALSE;
@@ -1776,10 +1817,17 @@ SCIP_Bool SCIPlpiIsOptimal(
 
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
-   assert((lpi->highs->getModelStatus() == HighsModelStatus::kOptimal)
-      == (SCIPlpiIsPrimalFeasible(lpi) && SCIPlpiIsDualFeasible(lpi)));
 
-   return lpi->highs->getModelStatus() == HighsModelStatus::kOptimal;
+   HighsModelStatus model_status = lpi->highs->getModelStatus();
+
+   if( model_status == HighsModelStatus::kModelEmpty )
+      return SCIPlpiIsPrimalFeasible(lpi);
+   else
+   {
+      assert(lpi->highs->getModelStatus() == HighsModelStatus::kOptimal || (!SCIPlpiIsPrimalFeasible(lpi) || !SCIPlpiIsDualFeasible(lpi)));
+      assert(lpi->highs->getModelStatus() != HighsModelStatus::kOptimal || (SCIPlpiIsPrimalFeasible(lpi) && SCIPlpiIsDualFeasible(lpi)));
+      return lpi->highs->getModelStatus() == HighsModelStatus::kOptimal;
+   }
 }
 
 /** returns TRUE iff current LP basis is stable */
@@ -1877,7 +1925,9 @@ SCIP_RETCODE SCIPlpiGetObjval(
    assert(lpi->highs != NULL);
    assert(objval != NULL);
 
-   lpi->highs->getInfoValue("objective_function_value", *objval);
+   HIGHS_CALL( lpi->highs->getInfoValue("objective_function_value", *objval) );
+   assert(lpi->highs->getModelStatus() != HighsModelStatus::kModelEmpty || *objval == 0.0);
+
    return SCIP_OKAY;
 }
 
@@ -1905,7 +1955,10 @@ SCIP_RETCODE SCIPlpiGetSol(
    int i;
 
    if( objval != NULL )
-      lpi->highs->getInfoValue("objective_function_value", *objval);
+   {
+      HIGHS_CALL( lpi->highs->getInfoValue("objective_function_value", *objval) );
+      assert(lpi->highs->getModelStatus() != HighsModelStatus::kModelEmpty || *objval == 0.0);
+   }
 
    const std::vector<double> &colValue = lpi->highs->getSolution().col_value;
    const std::vector<double> &colDual = lpi->highs->getSolution().col_dual;
@@ -1957,7 +2010,7 @@ SCIP_RETCODE SCIPlpiGetPrimalRay(
    assert(lpi->highs != NULL);
    assert(SCIPlpiHasPrimalRay(lpi));
 
-   /* HiGHS method does not implement this case, but we can easily try to construct an unbounded primal ray */
+   /* HiGHS does not implement this case, but we can easily construct an unbounded primal ray */
    if( lpi->highs->getNumRow() == 0 )
    {
       int numcol = lpi->highs->getNumCol();
@@ -2001,6 +2054,29 @@ SCIP_RETCODE SCIPlpiGetDualfarkas(
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
    assert(dualfarkas != NULL);
+
+   HighsModelStatus model_status = lpi->highs->getModelStatus();
+
+   /* HiGHS does not implement this case, but we can easily construct an unbounded dual ray */
+   if( model_status == HighsModelStatus::kModelEmpty )
+   {
+      SCIP_Real dualdir = lpi->highs->getLp().sense_ == ObjSense::kMinimize ? 1.0 : -1.0;
+      int numrow = lpi->highs->getNumRow();
+
+      assert(lpi->highs->getNumCol() == 0);
+
+      for( int i = 0; i < numrow; i++ )
+      {
+         if( lpi->highs->getLp().row_lower_[i] > 0.0 )
+            dualfarkas[i] = dualdir;
+         else if( lpi->highs->getLp().row_upper_[i] < 0.0 )
+            dualfarkas[i] = -dualdir;
+         else
+            dualfarkas[i] = 0.0;
+      }
+
+      return SCIP_OKAY;
+   }
 
    bool has_dual_ray = false;
    HIGHS_CALL( lpi->highs->getDualRay(has_dual_ray, dualfarkas) );
