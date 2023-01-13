@@ -26,6 +26,7 @@ Interface changes
 ### Interfaces to external software
 
 - updated XPRESS interface to work with XPRESS 41 as well
+- new interface to LP solver HiGHS (lpi_highs.cpp)
 
 ### Changed parameters
 

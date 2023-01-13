@@ -102,7 +102,7 @@ set(EXPRINT cppad CACHE STRING "options for expression interpreter")  #create th
 set_property(CACHE EXPRINT PROPERTY STRINGS none cppad )  #define list of values GUI will offer for the variable
 
 set(LPS spx CACHE STRING "options for LP solver")  #create the variable
-set_property(CACHE LPS PROPERTY STRINGS spx cpx grb xprs clp glop msk qso none )  #define list of values GUI will offer for the variable
+set_property(CACHE LPS PROPERTY STRINGS spx cpx grb xprs clp glop msk qso highs none )  #define list of values GUI will offer for the variable
 
 set(SYM bliss CACHE STRING "options for symmetry computation")  #create the variable
 set_property(CACHE SYM PROPERTY STRINGS bliss none )  #define list of values GUI will offer for the variable
@@ -400,6 +400,17 @@ elseif(LPS STREQUAL "xprs")
     find_package(XPRESS REQUIRED)
 elseif(LPS STREQUAL "msk")
     find_package(MOSEK REQUIRED)
+elseif(LPS STREQUAL "highs")
+    find_package(HIGHS REQUIRED CONFIG)
+    find_package(Threads REQUIRED)
+    find_package(OpenMP)
+    if(OPENMP_FOUND)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+    endif()
+    if(LPSCHECK)
+        find_package(SOPLEX REQUIRED CONFIG)
+        add_definitions(-DWITH_LPSCHECK)
+    endif()
 elseif(LPS STREQUAL "none")
     set(lpi lpi/lpi_none.c)
 else()
@@ -488,6 +499,15 @@ if(MOSEK_FOUND)
     set(LPS_PIC_LIBRARIES ${LPS_LIBRARIES})
 else()
     message(STATUS "Support MOSEK: OFF")
+endif()
+
+if(HIGHS_FOUND)
+    include_directories(${HIGHS_INCLUDE_DIRS})
+    if(LPS STREQUAL "highs")
+        set(lpi lpi/lpi_highs.cpp)
+    endif()
+    set(LPS_LIBRARIES ${LPS_LIBRARIES} ${HIGHS_LIBRARIES} Threads::Threads)
+    set(LPS_PIC_LIBRARIES ${LPS_PIC_LIBRARIES} ${HIGHS_LIBRARIES} Threads::Threads)
 endif()
 
 if(QSO_FOUND)
