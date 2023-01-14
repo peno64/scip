@@ -391,7 +391,7 @@ void invalidateSolution(
 
 /** converts basis statuses */
 static
-HighsBasisStatus SCIPstatToHighsBasisStatus(
+HighsBasisStatus basestatToHighsBasisStatus(
    const int             &stat
    )
 {
@@ -411,6 +411,30 @@ HighsBasisStatus SCIPstatToHighsBasisStatus(
       return HighsBasisStatus::kZero;
    }
 }
+
+/** returns a string representation of the simplex strategy parameter */
+static
+std::string simplexStrategyToString(
+   const int             &strategy
+   )
+{
+   switch( strategy )
+   {
+   case 0:
+      return "Choose";
+   case 1:
+      return "Dual (serial)";
+   case 2:
+      return "Dual (PAMI)";
+   case 3:
+      return "Dual (SIP)";
+   case 4:
+      return "Primal";
+   default:
+      return "Unknown";
+   }
+}
+
 
 /*
  * LP Interface Methods
@@ -1352,10 +1376,35 @@ SCIP_RETCODE SCIPlpiSolveDual(
     */
    HIGHS_CALL_WITH_WARNING( lpi->highs->run() );
 
-   /* FIXME: query error-free model status safely */
-   if( lpi->highs->getModelStatus() < HighsModelStatus::kModelEmpty || lpi->highs->getModelStatus() >= HighsModelStatus::kUnknown )
+   HighsModelStatus model_status = lpi->highs->getModelStatus();
+   switch( model_status )
    {
-      SCIPerrorMessage("HiGHS returned HighsModelStatus=%d.\n", (int)lpi->highs->getModelStatus());
+   /* solved or resource limit reached */
+   case HighsModelStatus::kModelEmpty:
+   case HighsModelStatus::kOptimal:
+   case HighsModelStatus::kInfeasible:
+   case HighsModelStatus::kUnboundedOrInfeasible:
+   case HighsModelStatus::kUnbounded:
+   case HighsModelStatus::kObjectiveBound:
+   case HighsModelStatus::kTimeLimit:
+   case HighsModelStatus::kIterationLimit:
+      break;
+   /* errors or cases that should not occur in this LP interface */
+   case HighsModelStatus::kNotset:
+   case HighsModelStatus::kLoadError:
+   case HighsModelStatus::kModelError:
+   case HighsModelStatus::kPresolveError:
+   case HighsModelStatus::kSolveError:
+   case HighsModelStatus::kPostsolveError:
+   case HighsModelStatus::kSolutionLimit:
+   case HighsModelStatus::kObjectiveTarget:
+   case HighsModelStatus::kUnknown:
+   default:
+      int simplex_strategy = -1;
+      HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
+      SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d).\n",
+         lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
+         simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
       return SCIP_LPERROR;
    }
 
@@ -2205,12 +2254,12 @@ SCIP_RETCODE SCIPlpiSetBase(
    if( cstat != NULL )
    {
       for( int i = 0; i < lpi->highs->getLp().num_col_; ++i )
-         local_highs_basis.col_status[i] = SCIPstatToHighsBasisStatus(cstat[i]);
+         local_highs_basis.col_status[i] = basestatToHighsBasisStatus(cstat[i]);
    }
    if( rstat != NULL )
    {
       for( int i = 0; i < lpi->highs->getLp().num_row_; ++i )
-         local_highs_basis.row_status[i] = SCIPstatToHighsBasisStatus(rstat[i]);
+         local_highs_basis.row_status[i] = basestatToHighsBasisStatus(rstat[i]);
    }
    HIGHS_CALL( lpi->highs->setBasis(local_highs_basis) );
 
