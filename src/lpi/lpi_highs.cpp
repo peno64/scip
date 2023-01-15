@@ -435,6 +435,91 @@ std::string simplexStrategyToString(
    }
 }
 
+/** calls HiGHS to solve the LP with given settings */
+static
+SCIP_RETCODE lpiSolve(
+   SCIP_LPI*             lpi                 /**< LP interface structure */
+   )
+{
+   std::string presolvestring;
+
+   nsolvecalls++;
+   int ck_ca_n = -99999;
+   const bool check_lp = nsolvecalls == ck_ca_n;
+
+   SCIPdebugMessage("HiGHS LP solve is called for the %d time.\n", nsolvecalls);
+
+   assert(lpi != NULL);
+   assert(lpi->highs != NULL);
+
+   if( lpi->fromscratch )
+   {
+      HIGHS_CALL( lpi->highs->clearSolver() );
+   }
+
+   lpi->highs->zeroAllClocks();
+
+   /* the optimization result may be reliable even if HiGHS returns a warning status, e.g., HiGHS always returns with a
+    * warning status if the iteration limit was hit
+    */
+   HIGHS_CALL_WITH_WARNING( lpi->highs->run() );
+
+   HighsModelStatus model_status = lpi->highs->getModelStatus();
+   switch( model_status )
+   {
+   /* solved or resource limit reached */
+   case HighsModelStatus::kModelEmpty:
+   case HighsModelStatus::kOptimal:
+   case HighsModelStatus::kInfeasible:
+   case HighsModelStatus::kUnboundedOrInfeasible:
+   case HighsModelStatus::kUnbounded:
+   case HighsModelStatus::kObjectiveBound:
+   case HighsModelStatus::kTimeLimit:
+   case HighsModelStatus::kIterationLimit:
+      break;
+   /* errors or cases that should not occur in this LP interface */
+   case HighsModelStatus::kNotset:
+   case HighsModelStatus::kLoadError:
+   case HighsModelStatus::kModelError:
+   case HighsModelStatus::kPresolveError:
+   case HighsModelStatus::kSolveError:
+   case HighsModelStatus::kPostsolveError:
+   case HighsModelStatus::kSolutionLimit:
+   case HighsModelStatus::kObjectiveTarget:
+   case HighsModelStatus::kUnknown:
+   default:
+      int simplex_strategy = -1;
+      HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
+      SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d).\n",
+         lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
+         simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
+      return SCIP_LPERROR;
+   }
+
+   /* if basis factorization is unavailable, this may be due to presolving; then solve again without presolve */
+   HIGHS_CALL( lpi->highs->getOptionValue("presolve", presolvestring) );
+   assert(presolvestring == "on" || presolvestring == "off"); /* values used in SCIPlpiSetIntpar() */
+   if( !lpi->highs->hasInvert() && presolvestring == "on" )
+   {
+      SCIPdebugMessage("No inverse: running HiGHS again without presolve . . .\n");
+      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "off") );
+      SCIP_CALL( lpiSolve(lpi) );
+      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "on") );
+   }
+
+   if( check_lp )
+   {
+      int highs_iterations;
+      HIGHS_CALL( lpi->highs->getInfoValue("simplex_iteration_count", highs_iterations) );
+      SCIPdebugMessage("After call %d o solve() f=%15g; Iter = %d; Status = %s\n", nsolvecalls,
+         lpi->highs->getObjectiveValue(), highs_iterations,
+         lpi->highs->modelStatusToString(lpi->highs->getModelStatus()).c_str());
+   }
+
+   lpi->solved = TRUE;
+   return SCIP_OKAY;
+}
+
 
 /*
  * LP Interface Methods
@@ -1326,8 +1411,13 @@ SCIP_RETCODE SCIPlpiSolvePrimal(
 
    assert(lpi != NULL);
 
-   /**@todo Could be done by lpi->highs->setOptionValue("simplex_strategy", 4) */
-   return SCIPlpiSolveDual(lpi);
+   /* primal simplex is only serial */
+   HIGHS_CALL( lpi->highs->setOptionValue("parallel", "off") );
+   HIGHS_CALL( lpi->highs->setOptionValue("threads", 1) );
+   HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 4) );
+   SCIP_CALL( lpiSolve(lpi) );
+
+   return SCIP_OKAY;
 }
 
 /** calls dual simplex to solve the LP */
@@ -1335,100 +1425,33 @@ SCIP_RETCODE SCIPlpiSolveDual(
    SCIP_LPI*             lpi                 /**< LP interface structure */
    )
 {
-   std::string presolvestring;
-
    SCIPdebugMessage("calling SCIPlpiSolveDual()\n");
 
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
 
-   nsolvecalls++;
-   int ck_ca_n = -99999;
-   const bool check_lp = nsolvecalls == ck_ca_n;
-   SCIPdebugMessage("In HiGHS dual-solve is called for the %d time.\n", nsolvecalls);
-
-   if( lpi->fromscratch )
-   {
-      HIGHS_CALL( lpi->highs->clearSolver() );
-   }
-
+   /* FIXME HiGHS still seems to get stuck sometimes in parallel mode, so we ignore nthreads for now. */
 #ifdef WITH_HIGHSPARALLEL
    if( lpi->nthreads == 0 || lpi->nthreads > 1 )
    {
-      SCIPdebugMessage("Running HiGHS in parallel with lpi->nthreads=%d\n", lpi->nthreads);
+      SCIPdebugMessage("Running HiGHS dual simplex in parallel with lpi->nthreads=%d\n", lpi->nthreads);
       HIGHS_CALL( lpi->highs->setOptionValue("parallel", "on") );
       HIGHS_CALL( lpi->highs->setOptionValue("threads", lpi->nthreads) ); /* note that also in HiGHS, 0 is the automatic setting */
+      HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 2) ); /* PAMI */
    }
    else
    {
 #endif
-      SCIPdebugMessage("Running HiGHS in serial with lpi->nthreads=%d\n", lpi->nthreads);
+      SCIPdebugMessage("Running HiGHS dual simplex in serial with lpi->nthreads=%d\n", lpi->nthreads);
       HIGHS_CALL( lpi->highs->setOptionValue("parallel", "off") );
       HIGHS_CALL( lpi->highs->setOptionValue("threads", 1) );
+      HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 1) );
 #ifdef WITH_HIGHSPARALLEL
    }
 #endif
 
-   lpi->highs->zeroAllClocks();
+   SCIP_CALL( lpiSolve(lpi) );
 
-   /* the optimization result may be reliable even if HiGHS returns a warning status, e.g., HiGHS always returns with a
-    * warning status if the iteration limit was hit
-    */
-   HIGHS_CALL_WITH_WARNING( lpi->highs->run() );
-
-   HighsModelStatus model_status = lpi->highs->getModelStatus();
-   switch( model_status )
-   {
-   /* solved or resource limit reached */
-   case HighsModelStatus::kModelEmpty:
-   case HighsModelStatus::kOptimal:
-   case HighsModelStatus::kInfeasible:
-   case HighsModelStatus::kUnboundedOrInfeasible:
-   case HighsModelStatus::kUnbounded:
-   case HighsModelStatus::kObjectiveBound:
-   case HighsModelStatus::kTimeLimit:
-   case HighsModelStatus::kIterationLimit:
-      break;
-   /* errors or cases that should not occur in this LP interface */
-   case HighsModelStatus::kNotset:
-   case HighsModelStatus::kLoadError:
-   case HighsModelStatus::kModelError:
-   case HighsModelStatus::kPresolveError:
-   case HighsModelStatus::kSolveError:
-   case HighsModelStatus::kPostsolveError:
-   case HighsModelStatus::kSolutionLimit:
-   case HighsModelStatus::kObjectiveTarget:
-   case HighsModelStatus::kUnknown:
-   default:
-      int simplex_strategy = -1;
-      HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
-      SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d).\n",
-         lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
-         simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
-      return SCIP_LPERROR;
-   }
-
-   /* if basis factorization is unavailable, this may be due to presolving; then solve again without presolve */
-   HIGHS_CALL( lpi->highs->getOptionValue("presolve", presolvestring) );
-   assert(presolvestring == "on" || presolvestring == "off"); /* values used in SCIPlpiSetIntpar() */
-   if( !lpi->highs->hasInvert() && presolvestring == "on" )
-   {
-      SCIPdebugMessage("No inverse: running HiGHS again without presolve . . .\n");
-      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "off") );
-      SCIP_CALL( SCIPlpiSolveDual(lpi) );
-      HIGHS_CALL( lpi->highs->setOptionValue("presolve", "on") );
-   }
-
-   if( check_lp )
-   {
-      int highs_iterations;
-      HIGHS_CALL( lpi->highs->getInfoValue("simplex_iteration_count", highs_iterations) );
-      SCIPdebugMessage("After call %d o solve() f=%15g; Iter = %d; Status = %s\n", nsolvecalls,
-         lpi->highs->getObjectiveValue(), highs_iterations,
-         lpi->highs->modelStatusToString(lpi->highs->getModelStatus()).c_str());
-   }
-
-   lpi->solved = TRUE;
    return SCIP_OKAY;
 }
 
