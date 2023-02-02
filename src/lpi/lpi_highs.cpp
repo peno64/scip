@@ -801,9 +801,14 @@ SCIP_RETCODE SCIPlpiAddCols(
          assert(val[j] != 0.0);
       }
    }
+
+   /* HiGHS returns with a warning if values are within the zero tolerance, but seems to continue safely simply ignoring
+    * them; in debug mode we stop, in optimized mode we accept this behavior */
+   HIGHS_CALL( lpi->highs->addCols(ncols, obj, lb, ub, nnonz, beg, ind, val) );
+#else
+   HIGHS_CALL_WITH_WARNING( lpi->highs->addCols(ncols, obj, lb, ub, nnonz, beg, ind, val) );
 #endif
 
-   HIGHS_CALL( lpi->highs->addCols(ncols, obj, lb, ub, nnonz, beg, ind, val) );
    return SCIP_OKAY;
 }
 
@@ -888,9 +893,14 @@ SCIP_RETCODE SCIPlpiAddRows(
          assert(0 <= ind[j] && ind[j] < ncols);
       }
    }
+
+   /* HiGHS returns with a warning if values are within the zero tolerance, but seems to continue safely simply ignoring
+    * them; in debug mode we stop, in optimized mode we accept this behavior */
+   HIGHS_CALL( lpi->highs->addRows(nrows, lhs, rhs, nnonz, beg, ind, val) );
+#else
+   HIGHS_CALL_WITH_WARNING( lpi->highs->addRows(nrows, lhs, rhs, nnonz, beg, ind, val) );
 #endif
 
-   HIGHS_CALL( lpi->highs->addRows(nrows, lhs, rhs, nnonz, beg, ind, val) );
    return SCIP_OKAY;
 }
 
