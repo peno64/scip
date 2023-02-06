@@ -73,7 +73,9 @@
 #include "scip/pub_message.h"
 #include "scip/type_lp.h"
 
-/* #define HIGHS_DEBUG */
+/* #define HIGHS_DEBUGLEVEL kHighsDebugLevelExpensive */
+/* #define HIGHS_LOGDEVLEVEL kHighsLogDevLevelVerbose */
+
 /*
  * Macros, structs, etc.
  */
@@ -654,9 +656,13 @@ SCIP_RETCODE SCIPlpiCreate(
    /* set objective sense */
    SCIP_CALL( SCIPlpiChgObjsen(*lpi, objsen) );
 
-   /* Set the HiGHS debug level */
-#ifdef HIGHS_DEBUG
-   HIGHS_CALL( (*lpi)->highs->setOptionValue("highs_debug_level", 2) );
+   /* set output and debug level */
+   HIGHS_CALL( (*lpi)->highs->setOptionValue("output_flag", false) );
+#ifdef HIGHS_LOGDEVLEVEL
+   HIGHS_CALL( (*lpi)->highs->setOptionValue("log_dev_level", HIGHS_LOGDEVLEVEL) );
+#endif
+#ifdef HIGHS_DEBUGLEVEL
+   HIGHS_CALL( (*lpi)->highs->setOptionValue("highs_debug_level", HIGHS_DEBUGLEVEL) );
 #endif
 
    /* set default scaling */
