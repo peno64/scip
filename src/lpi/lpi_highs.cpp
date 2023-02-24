@@ -109,14 +109,13 @@
                            }                                                                                   \
                            catch( ... )                                                                        \
                            {                                                                                   \
-                              SCIPerrorMessage("HiGHS threw an unidentified exception.\n");                    \
+                              SCIPerrorMessage("HiGHS threw an unidentified exception\n");                     \
                               return SCIP_LPERROR;                                                             \
                            }                                                                                   \
                         }                                                                                      \
                         while( FALSE )
 
-/** A relaxed version of HIGHS_CALL that accepts status kWarning; prints warning message only in debug mode. */
-#ifndef NDEBUG
+/** A relaxed version of HIGHS_CALL that accepts status kWarning. */
 #define HIGHS_CALL_WITH_WARNING(x)   do                                                                        \
                         {                                                                                      \
                            try                                                                                 \
@@ -125,7 +124,8 @@
                               (_restat_ = (x));                                                                \
                               if( _restat_ != HighsStatus::kOk && _restat_ != HighsStatus::kWarning )          \
                               {                                                                                \
-                                 SCIPerrorMessage("Error in HiGHS function call\n");                           \
+                                 SCIPerrorMessage("Error in HiGHS in function call (returned %d)\n",           \
+                                    int(_restat_));                                                            \
                                  return SCIP_LPERROR;                                                          \
                               }                                                                                \
                            }                                                                                   \
@@ -137,38 +137,11 @@
                            }                                                                                   \
                            catch( ... )                                                                        \
                            {                                                                                   \
-                              SCIPerrorMessage("HiGHS threw an unidentified exception.\n");                    \
+                              SCIPerrorMessage("HiGHS threw an unidentified exception\n");                     \
                               return SCIP_LPERROR;                                                             \
                            }                                                                                   \
                         }                                                                                      \
                         while( FALSE )
-#else
-#define HIGHS_CALL_WITH_WARNING(x)   do                                                                        \
-                        {                                                                                      \
-                           try                                                                                 \
-                           {                                                                                   \
-                              HighsStatus _restat_; /*lint -e{506,774}*/                                       \
-                              (_restat_ = (x));                                                                \
-                              if( _restat_ != HighsStatus::kOk && _restat_ != HighsStatus::kWarning )          \
-                              {                                                                                \
-                                 SCIPerrorMessage("Error in HiGHS in function call\n");                        \
-                                 return SCIP_LPERROR;                                                          \
-                              }                                                                                \
-                           }                                                                                   \
-                           catch( std::exception & E )                                                         \
-                           {                                                                                   \
-                              std::string s = E.what();                                                        \
-                              SCIPerrorMessage( "HiGHS threw an exception: %s\n", s.c_str());                  \
-                              return SCIP_LPERROR;                                                             \
-                           }                                                                                   \
-                           catch( ... )                                                                        \
-                           {                                                                                   \
-                              SCIPerrorMessage("HiGHS threw an unidentified exception.\n");                    \
-                              return SCIP_LPERROR;                                                             \
-                           }                                                                                   \
-                        }                                                                                      \
-                        while( FALSE )
-#endif
 
 /**@todo make thread-safe */
 int nsolvecalls = 0;
@@ -449,7 +422,7 @@ SCIP_RETCODE lpiSolve(
    int ck_ca_n = -99999;
    const bool check_lp = nsolvecalls == ck_ca_n;
 
-   SCIPdebugMessage("HiGHS LP solve is called for the %d time.\n", nsolvecalls);
+   SCIPdebugMessage("HiGHS LP solve is called for the %d time\n", nsolvecalls);
 
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
@@ -478,6 +451,15 @@ SCIP_RETCODE lpiSolve(
    case HighsModelStatus::kObjectiveBound:
    case HighsModelStatus::kTimeLimit:
    case HighsModelStatus::kIterationLimit:
+#ifdef SCIP_DEBUG
+      {
+         int simplex_strategy = -1;
+         HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
+         SCIPdebugMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d)\n",
+            lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
+            simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
+      }
+#endif
       break;
    /* errors or cases that should not occur in this LP interface */
    case HighsModelStatus::kNotset:
@@ -490,11 +472,13 @@ SCIP_RETCODE lpiSolve(
    case HighsModelStatus::kObjectiveTarget:
    case HighsModelStatus::kUnknown:
    default:
-      int simplex_strategy = -1;
-      HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
-      SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d).\n",
-         lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
-         simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
+      {
+         int simplex_strategy = -1;
+         HIGHS_CALL( lpi->highs->getOptionValue("simplex_strategy", simplex_strategy) );
+         SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after simplex strategy <%s> (%d)\n",
+            lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status,
+            simplexStrategyToString(simplex_strategy).c_str(), simplex_strategy);
+      }
       return SCIP_LPERROR;
    }
 
@@ -503,10 +487,19 @@ SCIP_RETCODE lpiSolve(
    assert(presolvestring == "on" || presolvestring == "off"); /* values used in SCIPlpiSetIntpar() */
    if( !lpi->highs->hasInvert() && presolvestring == "on" )
    {
+      SCIP_RETCODE retcode;
+
       SCIPdebugMessage("No inverse: running HiGHS again without presolve . . .\n");
       HIGHS_CALL( lpi->highs->setOptionValue("presolve", "off") );
-      SCIP_CALL( lpiSolve(lpi) );
+      retcode = lpiSolve(lpi);
+      if( retcode != SCIP_OKAY )
+      {
+         HighsModelStatus model_status = lpi->highs->getModelStatus();
+         SCIPerrorMessage("HiGHS terminated with model status <%s> (%d) after trying to recover inverse\n",
+            lpi->highs->modelStatusToString(model_status).c_str(), (int)model_status);
+      }
       HIGHS_CALL( lpi->highs->setOptionValue("presolve", "on") );
+      SCIP_CALL( retcode );
    }
 
    if( check_lp )
@@ -584,7 +577,7 @@ SCIP_RETCODE SCIPlpiSetIntegralityInformation(
    assert( ncols >= 0 );
    assert( ncols == 0 || intInfo != NULL );
 
-   SCIPerrorMessage("SCIPlpiSetIntegralityInformation() has not been implemented yet.\n");
+   SCIPerrorMessage("SCIPlpiSetIntegralityInformation() has not been implemented yet\n");
 
    return SCIP_LPERROR;
 }
@@ -1001,12 +994,12 @@ SCIP_RETCODE SCIPlpiChgBounds(
 
       if( SCIPlpiIsInfinity(lpi, lb[i]) )
       {
-         SCIPerrorMessage( "LP Error: fixing lower bound for variable %d to infinity.\n", ind[i]);
+         SCIPerrorMessage( "LP Error: fixing lower bound for variable %d to infinity\n", ind[i]);
          return SCIP_LPERROR;
       }
       if( SCIPlpiIsInfinity(lpi, -ub[i]) )
       {
-         SCIPerrorMessage( "LP Error: fixing upper bound for variable %d to -infinity.\n", ind[i]);
+         SCIPerrorMessage( "LP Error: fixing upper bound for variable %d to -infinity\n", ind[i]);
          return SCIP_LPERROR;
       }
    }
@@ -1271,7 +1264,7 @@ SCIP_RETCODE SCIPlpiGetColNames(
 
    assert(lpi != NULL);
 
-   SCIPerrorMessage("SCIPlpiGetColNames() has not been implemented yet.\n");
+   SCIPerrorMessage("SCIPlpiGetColNames() has not been implemented yet\n");
 
    return SCIP_PLUGINNOTFOUND;
 }
@@ -1291,7 +1284,7 @@ SCIP_RETCODE SCIPlpiGetRowNames(
 
    assert(lpi != NULL);
 
-   SCIPerrorMessage("SCIPlpiGetRowNames() has not been implemented yet.\n");
+   SCIPerrorMessage("SCIPlpiGetRowNames() has not been implemented yet\n");
 
    return SCIP_PLUGINNOTFOUND;
 }
@@ -1482,7 +1475,7 @@ SCIP_RETCODE SCIPlpiSolveBarrier(
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
 
-   SCIPdebugMessage("HiGHS does not support Barrier - switching to dual simplex.\n");
+   SCIPdebugMessage("HiGHS does not support Barrier - switching to dual simplex\n");
    return SCIPlpiSolveDual(lpi);
 }
 
@@ -2088,7 +2081,7 @@ SCIP_RETCODE SCIPlpiGetSol(
       SCIPmessagePrintWarning( lpi->messagehdlr, "In HiGHS the size of the rows values %d does not fit the number of rows %d\\n\"", (int) rowValue.size(), nrows);
       SCIPmessagePrintWarning( lpi->messagehdlr, "In HiGHS the size of the dual row values %d does not fit the number of rows %d\\n\"", (int) rowDual.size(), nrows);
       assert((int) rowValue.size() == nrows);
-      SCIPmessagePrintWarning( lpi->messagehdlr, "HiGHS returned solution vector of inconsistent dimension.\n" );
+      SCIPmessagePrintWarning( lpi->messagehdlr, "HiGHS returned solution vector of inconsistent dimension\n" );
       return SCIP_LPERROR;
    }
 
