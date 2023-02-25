@@ -80,6 +80,8 @@
  * Macros, structs, etc.
  */
 
+#define HIGHS_relDiff(val1, val2)         ( ((val1)-(val2))/(MAX3(1.0,REALABS(val1),REALABS(val2))) )
+
 /** Macro for a single HiGHS call for which exceptions have to be caught. We make no distinction between different
  *  exception types, e.g., between memory allocation and other exceptions. Additionally, we check if HiGHS returns kOk
  *  as status and return an LP error if not.
@@ -1946,7 +1948,26 @@ SCIP_Bool SCIPlpiIsStable(
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
 
-   return SCIP_PLUGINNOTFOUND;
+   /* if an objective limit is set and HiGHS claims that it is exceeded, we should check that this is indeed the case;
+    * if not this points at numerical instability; note that this aligns with an assert in lp.c */
+   if( SCIPlpiIsObjlimExc(lpi) )
+   {
+      SCIP_Real objlimit;
+      SCIP_Real objvalue;
+
+      HIGHS_CALL( lpi->highs->getOptionValue("objective_bound", objlimit) );
+      HIGHS_CALL( lpi->highs->getInfoValue("objective_function_value", objvalue) );
+
+      if( lpi->highs->getLp().sense_ == ObjSense::kMaximize )
+      {
+         objlimit *= -1.0;
+         objvalue *= -1.0;
+      }
+      if( !SCIPlpiIsInfinity(lpi, objlimit) && HIGHS_relDiff(objvalue, objlimit) < -1e-9 )
+         return FALSE;
+   }
+
+   return TRUE;
 }
 
 /** returns TRUE iff the objective limit was reached */
@@ -2014,8 +2035,7 @@ SCIP_RETCODE SCIPlpiIgnoreInstability(
 
    assert(success != NULL);
 
-   /**@todo Check if this is relevant for HiGHS */
-   *success = FALSE;
+   *success = TRUE;
    return SCIP_OKAY;
 }
 
