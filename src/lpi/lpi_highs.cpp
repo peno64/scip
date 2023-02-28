@@ -29,13 +29,12 @@
  * @author Julian Hall
  * @author Alexander Hoen
  *
- * This interface to the LP solving functionality of the HiGHS project currently connects the serial dual simplex
- * implementation.
+ * This is an implementation of SCIP's LP interface for the open-source solver HiGHS.
  *
  * The most important open todos are:
- * - revise parameter handling and default parameters
- * - activate primal simplex
- * - activate parallel simplex
+ * - tune pricing strategy
+ * - tune and activate primal simplex
+ * - tune and activate parallel dual simplex
  */
 
 /*--+----1----+----2----+----3----+----4----+----5----+----6----+----7----+----8----+----9----+----0----+----1----+----2*/
@@ -1422,11 +1421,15 @@ SCIP_RETCODE SCIPlpiSolvePrimal(
 
    assert(lpi != NULL);
 
-   /* primal simplex is only serial */
+   /* HiGHS' primal simplex seems to still have performance issues, so we call the dual simplex instead. */
+#ifdef SCIP_WITH_HIGHSPRIMAL
    HIGHS_CALL( lpi->highs->setOptionValue("parallel", "off") );
    HIGHS_CALL( lpi->highs->setOptionValue("threads", 1) );
    HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 4) );
    SCIP_CALL( lpiSolve(lpi) );
+#else
+   SCIP_CALL( SCIPlpiSolveDual(lpi) );
+#endif
 
    return SCIP_OKAY;
 }
@@ -1441,8 +1444,8 @@ SCIP_RETCODE SCIPlpiSolveDual(
    assert(lpi != NULL);
    assert(lpi->highs != NULL);
 
-   /* FIXME HiGHS still seems to get stuck sometimes in parallel mode, so we ignore nthreads for now. */
-#ifdef WITH_HIGHSPARALLEL
+   /* HiGHS still seems to get stuck sometimes in parallel mode, so we ignore nthreads for now. */
+#ifdef SCIP_WITH_HIGHSPARALLEL
    if( lpi->nthreads == 0 || lpi->nthreads > 1 )
    {
       SCIPdebugMessage("Running HiGHS dual simplex in parallel with lpi->nthreads=%d\n", lpi->nthreads);
@@ -1451,15 +1454,13 @@ SCIP_RETCODE SCIPlpiSolveDual(
       HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 2) ); /* PAMI */
    }
    else
-   {
 #endif
+   {
       SCIPdebugMessage("Running HiGHS dual simplex in serial with lpi->nthreads=%d\n", lpi->nthreads);
       HIGHS_CALL( lpi->highs->setOptionValue("parallel", "off") );
       HIGHS_CALL( lpi->highs->setOptionValue("threads", 1) );
       HIGHS_CALL( lpi->highs->setOptionValue("simplex_strategy", 1) );
-#ifdef WITH_HIGHSPARALLEL
    }
-#endif
 
    SCIP_CALL( lpiSolve(lpi) );
 
