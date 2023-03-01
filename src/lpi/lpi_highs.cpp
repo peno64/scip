@@ -425,7 +425,7 @@ SCIP_RETCODE checkMatrixValue(
    HIGHS_CALL( lpi->highs->getOptionValue("small_matrix_value", small_matrix_value) );
    HIGHS_CALL( lpi->highs->getOptionValue("large_matrix_value", large_matrix_value) );
 
-   assert(fabs(value) > small_matrix_value);
+   assert(value == 0.0 || fabs(value) > small_matrix_value);
    assert(fabs(value) < large_matrix_value);
 #endif
 
