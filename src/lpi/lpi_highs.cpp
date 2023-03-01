@@ -411,6 +411,27 @@ std::string simplexStrategyToString(
    }
 }
 
+/** checks that matrix values are within range defined by HiGHS parameters */
+static
+SCIP_RETCODE checkMatrixValue(
+   SCIP_LPI*             lpi,                /**< LP interface structure */
+   SCIP_Real             value               /**< value of coefficient */
+   )
+{
+#ifndef NDEBUG
+   SCIP_Real small_matrix_value;
+   SCIP_Real large_matrix_value;
+
+   HIGHS_CALL( lpi->highs->getOptionValue("small_matrix_value", small_matrix_value) );
+   HIGHS_CALL( lpi->highs->getOptionValue("large_matrix_value", large_matrix_value) );
+
+   assert(fabs(value) > small_matrix_value);
+   assert(fabs(value) < large_matrix_value);
+#endif
+
+   return SCIP_OKAY;
+}
+
 /** calls HiGHS to solve the LP with given settings */
 static
 SCIP_RETCODE lpiSolve(
@@ -745,6 +766,7 @@ SCIP_RETCODE SCIPlpiLoadColLP(
    {
       assert(0 <= ind[j] && ind[j] < nrows);
       assert(val[j] != 0.0);
+      SCIP_CALL( checkMatrixValue(lpi, val[j]) );
    }
 #endif
 
@@ -799,6 +821,7 @@ SCIP_RETCODE SCIPlpiAddCols(
       {
          assert(0 <= ind[j] && ind[j] < nrows);
          assert(val[j] != 0.0);
+         SCIP_CALL( checkMatrixValue(lpi, val[j]) );
       }
    }
 
@@ -889,8 +912,9 @@ SCIP_RETCODE SCIPlpiAddRows(
       int ncols = lpi->highs->getLp().num_col_;
       for( int j = 0; j < nnonz; ++j )
       {
-         assert(val[j] != 0.0);
          assert(0 <= ind[j] && ind[j] < ncols);
+         assert(val[j] != 0.0);
+         SCIP_CALL( checkMatrixValue(lpi, val[j]) );
       }
    }
 
@@ -1054,6 +1078,7 @@ SCIP_RETCODE SCIPlpiChgCoef(
 
    invalidateSolution(lpi);
 
+   SCIP_CALL( checkMatrixValue(lpi, newval) );
    HIGHS_CALL( lpi->highs->changeCoeff(row, col, newval) );
 
    return SCIP_OKAY;
